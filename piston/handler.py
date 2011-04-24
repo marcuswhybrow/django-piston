@@ -51,9 +51,59 @@ class BaseHandler(object):
     anonymous = is_anonymous = False
     exclude = ( 'id', )
     fields =  ( )
+    _instance = None
+    
+    def _resolve_fk(self, klass, key):
+        if key in self.dct:
+            try:
+                self.dct[key] = klass.objects.get(pk=self.dct[key])
+            except klass.DoesNotExist:
+                resp = rc.BAD_REQUEST
+                resp.write('%s with primary key "%d" not found.' % (klass.__name__, self.dct[key]))
+    
+    def _handle_m2m(self, model, field_name):
+        m2m_attr = getattr(self._instance, field_name)
+        remove_key = field_name + '__remove'
+        add_key = field_name + '__add'
+
+        if remove_key in self.dct:
+            pk_set = [int(pk) for pk in self.dct[remove_key].split(',')]
+            for pk in pk_set:
+                try:
+                    m2m_attr.remove(model.objects.get(pk=pk))
+                except model.DoesNotExist:
+                    continue
+            del self.dct[remove_key]
+        elif add_key in self.dct:
+            pk_set = [int(pk) for pk in self.dct[add_key].split(',')]
+            for pk in pk_set:
+                try:
+                    m2m_attr.add(model.objects.get(pk=pk))
+                except model.DoesNotExist:
+                    continue
+            del self.dct[add_key]
+    
+    def _resolve_extras(self, request):
+        if request.data:
+            self.dct = request.data.copy()
+            self.error = None
+
+            for field in self.model._meta.fields:
+                if isinstance(field, ForeignKey):
+                    self._resolve_fk(field.related.parent_model, field.name)
+
+            if self._instance is not None:
+                for field, model in self.model._meta.get_m2m_with_model():
+                    self._handle_m2m(field.related.parent_model, field.name)
+
+            request.data = self.dct
+            return self.error or None
 
     def flatten_dict(self, dct):
-        return dict([ (str(k), dct.get(k)) for k in dct.keys() ])
+        result = dict([ (str(k), dct.get(k)) for k in dct.keys() ])
+        if 'csrfmiddlewaretoken' in result:
+            del result['csrfmiddlewaretoken']
+        return result
 
     def has_model(self):
         return hasattr(self, 'model') or hasattr(self, 'queryset')
@@ -94,6 +144,10 @@ class BaseHandler(object):
             return self.queryset(request).filter(*args, **kwargs)
 
     def create(self, request, *args, **kwargs):
+        error = self._resolve_extras(request)
+        if error:
+            return error
+            
         if not self.has_model():
             return rc.NOT_IMPLEMENTED
 
@@ -120,17 +174,21 @@ class BaseHandler(object):
             return rc.BAD_REQUEST
 
         try:
-            inst = self.queryset(request).get(pk=kwargs.get(pkfield))
+            self._instance = self.queryset(request).get(pk=kwargs.get(pkfield))
         except ObjectDoesNotExist:
             return rc.NOT_FOUND
         except MultipleObjectsReturned: # should never happen, since we're using a PK
             return rc.BAD_REQUEST
+        
+        error = self._resolve_extras(request)
+        if error:
+            return error
 
         attrs = self.flatten_dict(request.data)
         for k,v in attrs.iteritems():
             setattr( inst, k, v )
 
-        inst.save()
+        self._instance.save()
         return rc.ALL_OK
 
     def delete(self, request, *args, **kwargs):
