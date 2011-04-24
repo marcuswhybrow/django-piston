@@ -187,7 +187,7 @@ class BaseHandler(object):
 
         attrs = self.flatten_dict(request.data)
         for k,v in attrs.iteritems():
-            setattr( inst, k, v )
+            setattr( self._instance, k, v )
 
         self._instance.save()
         return rc.ALL_OK
