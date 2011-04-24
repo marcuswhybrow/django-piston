@@ -3,6 +3,7 @@ import warnings
 from utils import rc
 from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
 from django.conf import settings
+from django.db.models.fields.related import ForeignKey
 
 typemapper = { }
 handler_tracker = [ ]
